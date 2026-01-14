@@ -1,13 +1,14 @@
--- NEVERLOSE HUB PRO EDITION (FULL CODE)
+-- NEVERLOSE PRO EDITION - COMPLETE SCRIPT
 -- Services
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
-local UIS = game:GetService("UserInputService")
+local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Stats = game:GetService("Stats")
 local SoundService = game:GetService("SoundService")
+local Lighting = game:GetService("Lighting")
 
 -- Configuration
 local Config = {
@@ -15,7 +16,8 @@ local Config = {
         Enabled = true,
         HealthBar = true,
         MaxDistance = 300,
-        Color = Color3.new(1, 1, 1)
+        Color = Color3.new(1, 1, 1),
+        BoxSize = 25
     },
     AimLock = {
         Enabled = true,
@@ -23,53 +25,129 @@ local Config = {
         FOV = 60,
         Smoothness = 0.5,
         Prediction = 0.15,
-        TeamCheck = false
+        TeamCheck = false,
+        MaxDistance = 250
     },
     TriggerBot = {
         Enabled = false,
-        Delay = 0.1
+        Delay = 0.1,
+        ActivationRange = 50
     },
     SpinBot = {
         Enabled = false,
-        Speed = 35
+        Speed = 35,
+        Mode = "Yaw"
     },
     Misc = {
         Tracers = false,
+        TracerColor = Color3.fromRGB(170, 0, 255),
         JumpMarks = false,
+        JumpMarkColor = Color3.fromRGB(200, 0, 255),
         HitSounds = false,
+        HitSoundID = 96373156404300,
+        KillSoundID = 105714474522917,
         BackgroundSound = false,
-        SoundId = ""
+        BackgroundSoundID = "",
+        Volume = 0.5
     }
 }
 
--- State
+-- State variables
 local AimActive = false
 local CurrentTarget = nil
 local ESPDrawings = {}
 local TracerDrawings = {}
-local VelocityCache = {}
-local MainFramePosition = UDim2.new(0, 20, 0.5, -175)
-local UIVisible = true
-local Authenticated = false
+local PlayerVelocities = {}
+local LastPlayerHealth = {}
+local SpinAngle = 0
+local IsAuthenticated = false
+local MainUIPosition = UDim2.new(0, 20, 0.5, -175)
+local IsUIVisible = true
+local BackgroundSoundInstance = nil
 
--- Sound IDs
-local HitSounds = {
-    Hit = 96373156404300,
-    Kill = 105714474522917
-}
+-- Sound setup
+local function SetupHitSounds()
+    if not Config.Misc.HitSounds then return end
+    
+    local hitSound = Instance.new("Sound")
+    hitSound.SoundId = "rbxassetid://" .. Config.Misc.HitSoundID
+    hitSound.Volume = Config.Misc.Volume
+    hitSound.Name = "NeverLoseHitSound"
+    hitSound.Parent = SoundService
+    
+    local killSound = Instance.new("Sound")
+    killSound.SoundId = "rbxassetid://" .. Config.Misc.KillSoundID
+    killSound.Volume = Config.Misc.Volume
+    killSound.Name = "NeverLoseKillSound"
+    killSound.Parent = SoundService
+    
+    -- Track player health changes
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        spawn(function()
+            local character = player.Character
+            if not character then
+                player.CharacterAdded:Wait()
+                character = player.Character
+            end
+            
+            local humanoid = character:WaitForChild("Humanoid", 5)
+            if not humanoid then return end
+            
+            LastPlayerHealth[player] = humanoid.Health
+            
+            humanoid.HealthChanged:Connect(function(newHealth)
+                if not Config.Misc.HitSounds then return end
+                
+                local oldHealth = LastPlayerHealth[player] or newHealth
+                
+                if newHealth < oldHealth then
+                    hitSound:Play()
+                    
+                    if newHealth <= 0 then
+                        task.wait(0.2)
+                        killSound:Play()
+                    end
+                end
+                
+                LastPlayerHealth[player] = newHealth
+            end)
+        end)
+    end
+end
 
--- GUI
+-- Background music
+local function SetupBackgroundMusic()
+    if BackgroundSoundInstance then
+        BackgroundSoundInstance:Stop()
+        BackgroundSoundInstance:Destroy()
+        BackgroundSoundInstance = nil
+    end
+    
+    if Config.Misc.BackgroundSound and Config.Misc.BackgroundSoundID ~= "" then
+        BackgroundSoundInstance = Instance.new("Sound")
+        BackgroundSoundInstance.SoundId = "rbxassetid://" .. Config.Misc.BackgroundSoundID
+        BackgroundSoundInstance.Volume = Config.Misc.Volume
+        BackgroundSoundInstance.Looped = true
+        BackgroundSoundInstance.Parent = SoundService
+        BackgroundSoundInstance:Play()
+    end
+end
+
+-- GUI Creation
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "NeverLosePro"
+ScreenGui.Name = "NeverLoseProGUI"
 ScreenGui.Parent = game:GetService("CoreGui")
 
--- Minimized window
+-- Minimized window (top-left)
 local MinimizedFrame = Instance.new("Frame")
-MinimizedFrame.Size = UDim2.new(0, 220, 0, 50)
+MinimizedFrame.Size = UDim2.new(0, 240, 0, 55)
 MinimizedFrame.Position = UDim2.new(0, 10, 0, 10)
 MinimizedFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 MinimizedFrame.BackgroundTransparency = 0.05
 MinimizedFrame.Visible = false
+MinimizedFrame.BorderSizePixel = 0
 MinimizedFrame.Parent = ScreenGui
 
 local MinimizedCorner = Instance.new("UICorner")
@@ -77,157 +155,421 @@ MinimizedCorner.CornerRadius = UDim.new(0, 8)
 MinimizedCorner.Parent = MinimizedFrame
 
 local MinimizedText = Instance.new("TextLabel")
-MinimizedText.Size = UDim2.new(1, -10, 0.7, 0)
+MinimizedText.Size = UDim2.new(1, -10, 0.6, 0)
 MinimizedText.Position = UDim2.new(0, 5, 0, 5)
 MinimizedText.BackgroundTransparency = 1
-MinimizedText.Text = "NeverLose | ...ping | ...FPS | Pro Edition"
+MinimizedText.Text = "NeverLose | ...ms | ... FPS | Pro Edition"
 MinimizedText.TextColor3 = Color3.new(1, 1, 1)
 MinimizedText.Font = Enum.Font.GothamMedium
-MinimizedText.TextSize = 12
+MinimizedText.TextSize = 13
 MinimizedText.TextXAlignment = Enum.TextXAlignment.Left
 MinimizedText.Parent = MinimizedFrame
 
-local PurpleBar = Instance.new("Frame")
-PurpleBar.Size = UDim2.new(1, -20, 0, 2)
-PurpleBar.Position = UDim2.new(0, 10, 1, -4)
-PurpleBar.BackgroundColor3 = Color3.fromRGB(170, 0, 255)
-PurpleBar.BorderSizePixel = 0
-PurpleBar.Parent = MinimizedFrame
+local MinimizedPurpleBar = Instance.new("Frame")
+MinimizedPurpleBar.Size = UDim2.new(1, -20, 0, 2)
+MinimizedPurpleBar.Position = UDim2.new(0, 10, 1, -4)
+MinimizedPurpleBar.BackgroundColor3 = Color3.fromRGB(170, 0, 255)
+MinimizedPurpleBar.BorderSizePixel = 0
+MinimizedPurpleBar.Parent = MinimizedFrame
 
--- FPS/PING Update
+-- Main Window
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 320, 0, 420)
+MainFrame.Position = MainUIPosition
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainFrame.BackgroundTransparency = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Visible = false
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 10)
+MainCorner.Parent = MainFrame
+
+-- Top Bar
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 40)
+TopBar.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+
+local TopBarCorner = Instance.new("UICorner")
+TopBarCorner.CornerRadius = UDim.new(0, 10)
+TopBarCorner.Parent = TopBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -40, 1, 0)
+TitleLabel.Position = UDim2.new(0, 10, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "NeverLose Pro Edition"
+TitleLabel.TextColor3 = Color3.new(1, 1, 1)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 16
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TopBar
+
+local StatsLabel = Instance.new("TextLabel")
+StatsLabel.Size = UDim2.new(0, 100, 1, 0)
+StatsLabel.Position = UDim2.new(1, -110, 0, 0)
+StatsLabel.BackgroundTransparency = 1
+StatsLabel.Text = "0ms | 0 FPS"
+StatsLabel.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+StatsLabel.Font = Enum.Font.Gotham
+StatsLabel.TextSize = 12
+StatsLabel.Parent = TopBar
+
+local TopPurpleBar = Instance.new("Frame")
+TopPurpleBar.Size = UDim2.new(1, 0, 0, 2)
+TopPurpleBar.Position = UDim2.new(0, 0, 1, 0)
+TopPurpleBar.BackgroundColor3 = Color3.fromRGB(170, 0, 255)
+TopPurpleBar.BorderSizePixel = 0
+TopPurpleBar.Parent = TopBar
+
+local CloseButton = Instance.new("TextButton")
+CloseButton.Size = UDim2.new(0, 30, 0, 30)
+CloseButton.Position = UDim2.new(1, -35, 0.5, -15)
+CloseButton.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+CloseButton.Text = "X"
+CloseButton.TextColor3 = Color3.new(1, 1, 1)
+CloseButton.Font = Enum.Font.GothamBold
+CloseButton.TextSize = 14
+CloseButton.Parent = TopBar
+
+local CloseButtonCorner = Instance.new("UICorner")
+CloseButtonCorner.CornerRadius = UDim.new(0, 6)
+CloseButtonCorner.Parent = CloseButton
+
+-- Tabs
+local TabButtons = {}
+local TabFrames = {}
+
+local function CreateTab(tabName, positionX)
+    local tabButton = Instance.new("TextButton")
+    tabButton.Size = UDim2.new(0.5, -2, 0, 35)
+    tabButton.Position = UDim2.new(positionX, 0, 0, 45)
+    tabButton.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    tabButton.Text = tabName
+    tabButton.TextColor3 = Color3.new(1, 1, 1)
+    tabButton.Font = Enum.Font.Gotham
+    tabButton.TextSize = 14
+    tabButton.Parent = MainFrame
+    
+    local tabCorner = Instance.new("UICorner")
+    tabCorner.CornerRadius = UDim.new(0, 6)
+    tabCorner.Parent = tabButton
+    
+    local tabFrame = Instance.new("Frame")
+    tabFrame.Size = UDim2.new(1, -20, 0, 320)
+    tabFrame.Position = UDim2.new(0, 10, 0, 85)
+    tabFrame.BackgroundTransparency = 1
+    tabFrame.Visible = false
+    tabFrame.Parent = MainFrame
+    
+    TabButtons[tabName] = tabButton
+    TabFrames[tabName] = tabFrame
+    
+    return tabButton, tabFrame
+end
+
+local MainTabButton, MainTabFrame = CreateTab("Main", 0)
+local MiscTabButton, MiscTabFrame = CreateTab("Misc", 0.5)
+
+-- Tab switching
+MainTabButton.MouseButton1Click:Connect(function()
+    MainTabFrame.Visible = true
+    MiscTabFrame.Visible = false
+    MainTabButton.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+    MiscTabButton.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+end)
+
+MiscTabButton.MouseButton1Click:Connect(function()
+    MainTabFrame.Visible = false
+    MiscTabFrame.Visible = true
+    MiscTabButton.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+    MainTabButton.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+end)
+
+-- Main Tab Content
+local MainContentY = 10
+
+local function CreateToggle(parent, text, configPath)
+    local toggleFrame = Instance.new("Frame")
+    toggleFrame.Size = UDim2.new(1, 0, 0, 30)
+    toggleFrame.Position = UDim2.new(0, 0, 0, MainContentY)
+    toggleFrame.BackgroundTransparency = 1
+    toggleFrame.Parent = parent
+    
+    local toggleLabel = Instance.new("TextLabel")
+    toggleLabel.Size = UDim2.new(0.7, 0, 1, 0)
+    toggleLabel.BackgroundTransparency = 1
+    toggleLabel.Text = text
+    toggleLabel.TextColor3 = Color3.new(1, 1, 1)
+    toggleLabel.Font = Enum.Font.Gotham
+    toggleLabel.TextSize = 14
+    toggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    toggleLabel.Parent = toggleFrame
+    
+    local toggleButton = Instance.new("TextButton")
+    toggleButton.Size = UDim2.new(0.3, -10, 0.7, 0)
+    toggleButton.Position = UDim2.new(0.7, 5, 0.15, 0)
+    toggleButton.BackgroundColor3 = get(configPath) and Color3.fromRGB(60, 180, 80) or Color3.fromRGB(180, 60, 80)
+    toggleButton.Text = get(configPath) and "ON" or "OFF"
+    toggleButton.TextColor3 = Color3.new(1, 1, 1)
+    toggleButton.Font = Enum.Font.GothamBold
+    toggleButton.TextSize = 12
+    toggleButton.Parent = toggleFrame
+    
+    toggleButton.MouseButton1Click:Connect(function()
+        local current = get(configPath)
+        set(configPath, not current)
+        toggleButton.BackgroundColor3 = not current and Color3.fromRGB(60, 180, 80) or Color3.fromRGB(180, 60, 80)
+        toggleButton.Text = not current and "ON" or "OFF"
+    end)
+    
+    MainContentY = MainContentY + 35
+    return toggleButton
+end
+
+-- Helper functions for config
+local function get(path)
+    local parts = string.split(path, ".")
+    local current = Config
+    for _, part in ipairs(parts) do
+        current = current[part]
+    end
+    return current
+end
+
+local function set(path, value)
+    local parts = string.split(path, ".")
+    local current = Config
+    for i = 1, #parts - 1 do
+        current = current[parts[i]]
+    end
+    current[parts[#parts]] = value
+end
+
+-- Create Main toggles
+CreateToggle(MainTabFrame, "ESP", "ESP.Enabled")
+CreateToggle(MainTabFrame, "ESP Health Bar", "ESP.HealthBar")
+CreateToggle(MainTabFrame, "AimLock", "AimLock.Enabled")
+CreateToggle(MainTabFrame, "TriggerBot", "TriggerBot.Enabled")
+CreateToggle(MainTabFrame, "SpinBot", "SpinBot.Enabled")
+
+-- FOV Slider
+local FOVSliderFrame = Instance.new("Frame")
+FOVSliderFrame.Size = UDim2.new(1, 0, 0, 40)
+FOVSliderFrame.Position = UDim2.new(0, 0, 0, MainContentY)
+FOVSliderFrame.BackgroundTransparency = 1
+FOVSliderFrame.Parent = MainTabFrame
+
+local FOVLabel = Instance.new("TextLabel")
+FOVLabel.Size = UDim2.new(0.7, 0, 0.5, 0)
+FOVLabel.BackgroundTransparency = 1
+FOVLabel.Text = "AimLock FOV: " .. Config.AimLock.FOV
+FOVLabel.TextColor3 = Color3.new(1, 1, 1)
+FOVLabel.Font = Enum.Font.Gotham
+FOVLabel.TextSize = 14
+FOVLabel.TextXAlignment = Enum.TextXAlignment.Left
+FOVLabel.Parent = FOVSliderFrame
+
+local FOVValue = Instance.new("TextBox")
+FOVValue.Size = UDim2.new(0.3, -10, 0.5, 0)
+FOVValue.Position = UDim2.new(0.7, 5, 0, 0)
+FOVValue.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+FOVValue.Text = tostring(Config.AimLock.FOV)
+FOVValue.TextColor3 = Color3.new(1, 1, 1)
+FOVValue.Font = Enum.Font.Gotham
+FOVValue.TextSize = 12
+FOVValue.Parent = FOVSliderFrame
+
+FOVValue.FocusLost:Connect(function()
+    local value = tonumber(FOVValue.Text)
+    if value and value >= 1 and value <= 100 then
+        Config.AimLock.FOV = value
+        FOVLabel.Text = "AimLock FOV: " .. value
+    else
+        FOVValue.Text = tostring(Config.AimLock.FOV)
+    end
+end)
+
+MainContentY = MainContentY + 45
+
+-- Misc Tab Content
+local MiscContentY = 10
+CreateToggle(MiscTabFrame, "Tracers", "Misc.Tracers")
+CreateToggle(MiscTabFrame, "Jump Marks", "Misc.JumpMarks")
+CreateToggle(MiscTabFrame, "Hit Sounds", "Misc.HitSounds")
+CreateToggle(MiscTabFrame, "Background Sound", "Misc.BackgroundSound")
+
+-- Sound ID Input
+local SoundIDFrame = Instance.new("Frame")
+SoundIDFrame.Size = UDim2.new(1, 0, 0, 40)
+SoundIDFrame.Position = UDim2.new(0, 0, 0, MiscContentY)
+SoundIDFrame.BackgroundTransparency = 1
+SoundIDFrame.Parent = MiscTabFrame
+
+local SoundIDLabel = Instance.new("TextLabel")
+SoundIDLabel.Size = UDim2.new(0.7, 0, 0.5, 0)
+SoundIDLabel.BackgroundTransparency = 1
+SoundIDLabel.Text = "Sound ID:"
+SoundIDLabel.TextColor3 = Color3.new(1, 1, 1)
+SoundIDLabel.Font = Enum.Font.Gotham
+SoundIDLabel.TextSize = 14
+SoundIDLabel.TextXAlignment = Enum.TextXAlignment.Left
+SoundIDLabel.Parent = SoundIDFrame
+
+local SoundIDBox = Instance.new("TextBox")
+SoundIDBox.Size = UDim2.new(0.3, -10, 0.5, 0)
+SoundIDBox.Position = UDim2.new(0.7, 5, 0, 0)
+SoundIDBox.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+SoundIDBox.Text = Config.Misc.BackgroundSoundID
+SoundIDBox.TextColor3 = Color3.new(1, 1, 1)
+SoundIDBox.Font = Enum.Font.Gotham
+SoundIDBox.TextSize = 12
+SoundIDBox.PlaceholderText = "Audio ID"
+SoundIDBox.Parent = SoundIDFrame
+
+SoundIDBox.FocusLost:Connect(function()
+    Config.Misc.BackgroundSoundID = SoundIDBox.Text
+    SetupBackgroundMusic()
+end)
+
+-- Loading Screen
+local LoaderFrame = Instance.new("Frame")
+LoaderFrame.Size = UDim2.new(0, 500, 0, 300)
+LoaderFrame.Position = UDim2.new(0.5, -250, 0.5, -150)
+LoaderFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+LoaderFrame.BorderSizePixel = 0
+LoaderFrame.ZIndex = 10
+LoaderFrame.Parent = ScreenGui
+
+local NLabel = Instance.new("TextLabel")
+NLabel.Size = UDim2.new(0, 70, 0, 100)
+NLabel.Position = UDim2.new(0.5, -40, 0.3, -50)
+NLabel.BackgroundTransparency = 1
+NLabel.Text = "N"
+NLabel.TextColor3 = Color3.new(1, 1, 1)
+NLabel.Font = Enum.Font.GothamBlack
+NLabel.TextSize = 72
+NLabel.TextTransparency = 1
+NLabel.ZIndex = 11
+NLabel.Parent = LoaderFrame
+
+local LLabel = Instance.new("TextLabel")
+LLabel.Size = UDim2.new(0, 70, 0, 100)
+LLabel.Position = UDim2.new(0.5, 20, 0.3, -50)
+LLabel.BackgroundTransparency = 1
+LLabel.Text = "L"
+LLabel.TextColor3 = Color3.new(1, 1, 1)
+LLabel.Font = Enum.Font.GothamBlack
+LLabel.TextSize = 72
+LLabel.TextTransparency = 1
+LLabel.ZIndex = 11
+LLabel.Parent = LoaderFrame
+
+local LoadBarBack = Instance.new("Frame")
+LoadBarBack.Size = UDim2.new(0, 400, 0, 8)
+LoadBarBack.Position = UDim2.new(0.5, -200, 0.7, -4)
+LoadBarBack.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+LoadBarBack.BorderSizePixel = 0
+LoadBarBack.ZIndex = 11
+LoadBarBack.Parent = LoaderFrame
+
+local LoadBar = Instance.new("Frame")
+LoadBar.Size = UDim2.new(0, 0, 1, 0)
+LoadBar.BackgroundColor3 = Color3.new(1, 1, 1)
+LoadBar.BorderSizePixel = 0
+LoadBar.ZIndex = 12
+LoadBar.Parent = LoadBarBack
+
+local LoadText = Instance.new("TextLabel")
+LoadText.Size = UDim2.new(1, 0, 0, 25)
+LoadText.Position = UDim2.new(0, 0, 1, 10)
+LoadText.BackgroundTransparency = 1
+LoadText.Text = "Loading... 0%"
+LoadText.TextColor3 = Color3.new(0.8, 0.8, 0.8)
+LoadText.Font = Enum.Font.Gotham
+LoadText.TextSize = 16
+LoadText.ZIndex = 11
+LoadText.Parent = LoadBarBack
+
+-- Key Authentication Screen
+local KeyFrame = Instance.new("Frame")
+KeyFrame.Size = UDim2.new(0, 400, 0, 250)
+KeyFrame.Position = UDim2.new(0.5, -200, 0.5, -125)
+KeyFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+KeyFrame.BackgroundTransparency = 1
+KeyFrame.Visible = false
+KeyFrame.BorderSizePixel = 0
+KeyFrame.ZIndex = 10
+KeyFrame.Parent = ScreenGui
+
+local KeyTitle = Instance.new("TextLabel")
+KeyTitle.Size = UDim2.new(1, 0, 0, 50)
+KeyTitle.Position = UDim2.new(0, 0, 0, 20)
+KeyTitle.BackgroundTransparency = 1
+KeyTitle.Text = "ENTER KEY TO ACCESS NEVERLOSE"
+KeyTitle.TextColor3 = Color3.new(1, 1, 1)
+KeyTitle.Font = Enum.Font.GothamBold
+KeyTitle.TextSize = 20
+KeyTitle.ZIndex = 11
+KeyTitle.Parent = KeyFrame
+
+local KeyInput = Instance.new("TextBox")
+KeyInput.Size = UDim2.new(0, 300, 0, 45)
+KeyInput.Position = UDim2.new(0.5, -150, 0.5, -22)
+KeyInput.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+KeyInput.PlaceholderText = "Enter the key"
+KeyInput.Text = ""
+KeyInput.TextColor3 = Color3.new(1, 1, 1)
+KeyInput.Font = Enum.Font.Gotham
+KeyInput.TextSize = 18
+KeyInput.ZIndex = 11
+KeyInput.Parent = KeyFrame
+
+local EnterButton = Instance.new("TextButton")
+EnterButton.Size = UDim2.new(0, 140, 0, 40)
+EnterButton.Position = UDim2.new(0.5, -70, 0.8, 0)
+EnterButton.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+EnterButton.Text = "ENTER"
+EnterButton.TextColor3 = Color3.new(1, 1, 1)
+EnterButton.Font = Enum.Font.GothamBold
+EnterButton.TextSize = 16
+EnterButton.ZIndex = 11
+EnterButton.Parent = KeyFrame
+
+local KeyStatus = Instance.new("TextLabel")
+KeyStatus.Size = UDim2.new(1, 0, 0, 25)
+KeyStatus.Position = UDim2.new(0, 0, 0.65, 0)
+KeyStatus.BackgroundTransparency = 1
+KeyStatus.Text = ""
+KeyStatus.TextColor3 = Color3.new(1, 1, 1)
+KeyStatus.Font = Enum.Font.Gotham
+KeyStatus.TextSize = 14
+KeyStatus.ZIndex = 11
+KeyStatus.Parent = KeyFrame
+
+-- Functions
 local function UpdateStatsDisplay()
     local fps = math.floor(1 / RunService.RenderStepped:Wait())
-    local ping = "?"
+    local ping = 0
     
     local network = Stats.Network
     if network then
         ping = math.floor((network.ServerStatsItem["Data Ping"] or 0) * 1000)
     end
     
-    MinimizedText.Text = string.format("NeverLose | %dms | %d FPS | Pro Edition", ping, fps)
+    StatsLabel.Text = ping .. "ms | " .. fps .. " FPS"
+    MinimizedText.Text = "NeverLose | " .. ping .. "ms | " .. fps .. " FPS | Pro Edition"
 end
 
--- ==================== ESP SYSTEM ====================
-local function UpdateESP()
-    if not Config.ESP.Enabled then
-        for _, drawings in pairs(ESPDrawings) do
-            drawings.Box.Visible = false
-            drawings.HealthBar.Visible = false
-            drawings.Name.Visible = false
-        end
-        return
-    end
-    
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        
-        local character = player.Character
-        if not character then
-            if ESPDrawings[player] then
-                ESPDrawings[player].Box.Visible = false
-                ESPDrawings[player].HealthBar.Visible = false
-                ESPDrawings[player].Name.Visible = false
-            end
-            continue
-        end
-        
-        local humanoid = character:FindFirstChild("Humanoid")
-        local head = character:FindFirstChild("Head")
-        if not humanoid or not head or humanoid.Health <= 0 then
-            if ESPDrawings[player] then
-                ESPDrawings[player].Box.Visible = false
-                ESPDrawings[player].HealthBar.Visible = false
-                ESPDrawings[player].Name.Visible = false
-            end
-            continue
-        end
-        
-        local distance = (head.Position - Camera.CFrame.Position).Magnitude
-        if distance > Config.ESP.MaxDistance then
-            if ESPDrawings[player] then
-                ESPDrawings[player].Box.Visible = false
-                ESPDrawings[player].HealthBar.Visible = false
-                ESPDrawings[player].Name.Visible = false
-            end
-            continue
-        end
-        
-        -- Create drawings if not exists
-        if not ESPDrawings[player] then
-            ESPDrawings[player] = {
-                Box = Drawing.new("Square"),
-                HealthBar = Drawing.new("Square"),
-                Name = Drawing.new("Text")
-            }
-            ESPDrawings[player].Box.Color = Config.ESP.Color
-            ESPDrawings[player].Box.Thickness = 1
-            ESPDrawings[player].Box.Filled = false
-            
-            ESPDrawings[player].Name.Color = Config.ESP.Color
-            ESPDrawings[player].Name.Size = 13
-            ESPDrawings[player].Name.Outline = true
-        end
-        
-        local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-        if onScreen then
-            -- Box size
-            local scale = 1000 / math.max(distance, 10)
-            local boxSize = math.clamp(15 * scale / 100, 25, 60)
-            
-            -- Box position
-            local boxX = pos.X
-            local boxY = pos.Y - boxSize * 0.75
-            
-            ESPDrawings[player].Box.Size = Vector2.new(boxSize, boxSize * 1.5)
-            ESPDrawings[player].Box.Position = Vector2.new(boxX - boxSize/2, boxY)
-            ESPDrawings[player].Box.Visible = true
-            
-            -- Health bar (vertical, left side)
-            if Config.ESP.HealthBar then
-                local healthPercent = humanoid.Health / humanoid.MaxHealth
-                local barHeight = boxSize * 1.5
-                local healthHeight = barHeight * healthPercent
-                
-                ESPDrawings[player].HealthBar.Size = Vector2.new(3, barHeight)
-                ESPDrawings[player].HealthBar.Position = Vector2.new(boxX - boxSize/2 - 6, boxY)
-                ESPDrawings[player].HealthBar.Filled = true
-                ESPDrawings[player].HealthBar.Visible = true
-                
-                -- Color based on health
-                if healthPercent > 0.5 then
-                    ESPDrawings[player].HealthBar.Color = Color3.new(0, 1, 0) -- Green
-                elseif healthPercent > 0.25 then
-                    ESPDrawings[player].HealthBar.Color = Color3.new(1, 1, 0) -- Yellow
-                else
-                    ESPDrawings[player].HealthBar.Color = Color3.new(1, 0, 0) -- Red
-                end
-            else
-                ESPDrawings[player].HealthBar.Visible = false
-            end
-            
-            -- Name
-            ESPDrawings[player].Name.Position = Vector2.new(boxX, boxY - 15)
-            ESPDrawings[player].Name.Text = player.Name .. " [" .. math.floor(distance) .. "]"
-            ESPDrawings[player].Name.Visible = true
-            
-            -- Cache velocity for prediction
-            local root = character:FindFirstChild("HumanoidRootPart")
-            if root then
-                VelocityCache[player] = root.Velocity
-            end
-        else
-            ESPDrawings[player].Box.Visible = false
-            ESPDrawings[player].HealthBar.Visible = false
-            ESPDrawings[player].Name.Visible = false
-        end
-    end
-end
-
--- ==================== AIM LOCK WITH PREDICTION ====================
 local function GetClosestTarget()
     local closest = nil
     local closestDist = Config.AimLock.FOV
-    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     
     for _, player in ipairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
@@ -241,7 +583,7 @@ local function GetClosestTarget()
         if not humanoid or not head or humanoid.Health <= 0 then continue end
         
         local distance = (head.Position - Camera.CFrame.Position).Magnitude
-        if distance > 300 then continue end
+        if distance > Config.AimLock.MaxDistance then continue end
         
         local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
         if not onScreen then continue end
@@ -262,102 +604,180 @@ local function AimAtTarget(target)
     local head = target.Character:FindFirstChild("Head")
     if not head then return end
     
-    -- Apply prediction
     local predictedPosition = head.Position
-    if Config.AimLock.Prediction > 0 and VelocityCache[target] then
-        predictedPosition = head.Position + (VelocityCache[target] * Config.AimLock.Prediction)
+    if Config.AimLock.Prediction > 0 and PlayerVelocities[target] then
+        predictedPosition = head.Position + (PlayerVelocities[target] * Config.AimLock.Prediction)
     end
     
-    local cameraPos = Camera.CFrame.Position
-    local targetCFrame = CFrame.new(cameraPos, predictedPosition)
+    local targetCFrame = CFrame.new(Camera.CFrame.Position, predictedPosition)
     Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, Config.AimLock.Smoothness)
 end
 
--- ==================== TRACERS (PURPLE BULLET TRAILS) ====================
+local function UpdateESP()
+    if not Config.ESP.Enabled then
+        for _, drawings in pairs(ESPDrawings) do
+            if drawings.Box then drawings.Box.Visible = false end
+            if drawings.HealthBar then drawings.HealthBar.Visible = false end
+            if drawings.Name then drawings.Name.Visible = false end
+        end
+        return
+    end
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        
+        local character = player.Character
+        if not character then
+            if ESPDrawings[player] then
+                if ESPDrawings[player].Box then ESPDrawings[player].Box.Visible = false end
+                if ESPDrawings[player].HealthBar then ESPDrawings[player].HealthBar.Visible = false end
+                if ESPDrawings[player].Name then ESPDrawings[player].Name.Visible = false end
+            end
+            continue
+        end
+        
+        local humanoid = character:FindFirstChild("Humanoid")
+        local head = character:FindFirstChild("Head")
+        if not humanoid or not head or humanoid.Health <= 0 then
+            if ESPDrawings[player] then
+                if ESPDrawings[player].Box then ESPDrawings[player].Box.Visible = false end
+                if ESPDrawings[player].HealthBar then ESPDrawings[player].HealthBar.Visible = false end
+                if ESPDrawings[player].Name then ESPDrawings[player].Name.Visible = false end
+            end
+            continue
+        end
+        
+        local distance = (head.Position - Camera.CFrame.Position).Magnitude
+        if distance > Config.ESP.MaxDistance then
+            if ESPDrawings[player] then
+                if ESPDrawings[player].Box then ESPDrawings[player].Box.Visible = false end
+                if ESPDrawings[player].HealthBar then ESPDrawings[player].HealthBar.Visible = false end
+                if ESPDrawings[player].Name then ESPDrawings[player].Name.Visible = false end
+            end
+            continue
+        end
+        
+        if not ESPDrawings[player] then
+            ESPDrawings[player] = {
+                Box = Drawing.new("Square"),
+                HealthBar = Drawing.new("Square"),
+                Name = Drawing.new("Text")
+            }
+            ESPDrawings[player].Box.Color = Config.ESP.Color
+            ESPDrawings[player].Box.Thickness = 1
+            ESPDrawings[player].Box.Filled = false
+            
+            ESPDrawings[player].HealthBar.Filled = true
+            ESPDrawings[player].HealthBar.Thickness = 2
+            
+            ESPDrawings[player].Name.Color = Config.ESP.Color
+            ESPDrawings[player].Name.Size = 14
+            ESPDrawings[player].Name.Outline = true
+        end
+        
+        local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
+        if onScreen then
+            local scale = 1000 / math.max(distance, 10)
+            local boxSize = math.clamp(Config.ESP.BoxSize * scale / 100, 25, 60)
+            local boxX = pos.X
+            local boxY = pos.Y - boxSize * 0.75
+            
+            -- Box
+            ESPDrawings[player].Box.Size = Vector2.new(boxSize, boxSize * 1.5)
+            ESPDrawings[player].Box.Position = Vector2.new(boxX - boxSize / 2, boxY)
+            ESPDrawings[player].Box.Visible = true
+            
+            -- Health Bar (vertical left side)
+            if Config.ESP.HealthBar then
+                local healthPercent = humanoid.Health / humanoid.MaxHealth
+                local barHeight = boxSize * 1.5
+                local healthHeight = barHeight * healthPercent
+                
+                ESPDrawings[player].HealthBar.Size = Vector2.new(4, barHeight)
+                ESPDrawings[player].HealthBar.Position = Vector2.new(boxX - boxSize / 2 - 8, boxY)
+                ESPDrawings[player].HealthBar.Visible = true
+                
+                if healthPercent > 0.66 then
+                    ESPDrawings[player].HealthBar.Color = Color3.new(0, 1, 0) -- Green
+                elseif healthPercent > 0.33 then
+                    ESPDrawings[player].HealthBar.Color = Color3.new(1, 0.5, 0) -- Orange
+                else
+                    ESPDrawings[player].HealthBar.Color = Color3.new(1, 0, 0) -- Red
+                end
+            else
+                ESPDrawings[player].HealthBar.Visible = false
+            end
+            
+            -- Name
+            ESPDrawings[player].Name.Position = Vector2.new(boxX, boxY - 18)
+            ESPDrawings[player].Name.Text = player.Name .. " [" .. math.floor(distance) .. "]"
+            ESPDrawings[player].Name.Visible = true
+            
+            -- Cache velocity for prediction
+            local root = character:FindFirstChild("HumanoidRootPart")
+            if root then
+                PlayerVelocities[player] = root.Velocity
+            end
+        else
+            if ESPDrawings[player].Box then ESPDrawings[player].Box.Visible = false end
+            if ESPDrawings[player].HealthBar then ESPDrawings[player].HealthBar.Visible = false end
+            if ESPDrawings[player].Name then ESPDrawings[player].Name.Visible = false end
+        end
+    end
+end
+
+-- Tracers
 local function CreateTracer(startPos, endPos)
+    if not Config.Misc.Tracers then return end
+    
     local tracer = Drawing.new("Line")
     tracer.From = startPos
     tracer.To = endPos
-    tracer.Color = Color3.fromRGB(170, 0, 255) -- Purple
+    tracer.Color = Config.Misc.TracerColor
     tracer.Thickness = 2
     tracer.Transparency = 1
     
-    -- Fade out animation
+    -- Fade out effect
     spawn(function()
         for i = 1, 20 do
-            tracer.Transparency = i/20
-            task.wait(0.03)
+            if tracer then
+                tracer.Transparency = i / 20
+                task.wait(0.03)
+            end
         end
-        tracer:Remove()
+        if tracer then
+            tracer:Remove()
+        end
     end)
     
     table.insert(TracerDrawings, tracer)
 end
 
--- ==================== HIT SOUNDS ====================
-local function SetupHitSounds()
-    local hitSound = Instance.new("Sound")
-    hitSound.SoundId = "rbxassetid://" .. HitSounds.Hit
-    hitSound.Volume = 0.6
-    hitSound.Parent = SoundService
-    
-    local killSound = Instance.new("Sound")
-    killSound.SoundId = "rbxassetid://" .. HitSounds.Kill
-    killSound.Volume = 0.7
-    killSound.Parent = SoundService
-    
-    local playerHealth = {}
-    
-    local function TrackPlayer(player)
-        if player == LocalPlayer then return end
-        
-        spawn(function()
-            local character = player.Character or player.CharacterAdded:Wait()
-            local humanoid = character:WaitForChild("Humanoid", 5)
-            if not humanoid then return end
-            
-            playerHealth[player] = humanoid.Health
-            
-            humanoid.HealthChanged:Connect(function(newHealth)
-                if not Config.Misc.HitSounds then return end
-                
-                local oldHealth = playerHealth[player] or newHealth
-                
-                if newHealth < oldHealth then
-                    hitSound:Play()
-                    
-                    if newHealth <= 0 then
-                        task.wait(0.2)
-                        killSound:Play()
-                    end
-                end
-                
-                playerHealth[player] = newHealth
-            end)
-        end)
-    end
-    
-    for _, player in ipairs(Players:GetPlayers()) do
-        TrackPlayer(player)
-    end
-    
-    Players.PlayerAdded:Connect(TrackPlayer)
-end
+-- Event Handlers
+CloseButton.MouseButton1Click:Connect(function()
+    MainUIPosition = MainFrame.Position
+    MainFrame.Visible = false
+    MinimizedFrame.Visible = true
+    IsUIVisible = false
+end)
 
--- ==================== INPUT HANDLING ====================
-UIS.InputBegan:Connect(function(input)
-    -- Toggle UI with L
-    if input.KeyCode == Enum.KeyCode.L then
-        UIVisible = not UIVisible
-        
-        if MainFrame then
-            MainFrame.Visible = UIVisible
-        end
-        MinimizedFrame.Visible = not UIVisible
+MinimizedFrame.MouseButton1Click:Connect(function()
+    MinimizedFrame.Visible = false
+    MainFrame.Position = MainUIPosition
+    MainFrame.Visible = true
+    IsUIVisible = true
+end)
+
+UserInputService.InputBegan:Connect(function(input)
+    -- Toggle UI with Insert key
+    if input.KeyCode == Enum.KeyCode.Insert then
+        IsUIVisible = not IsUIVisible
+        MainFrame.Visible = IsUIVisible
+        MinimizedFrame.Visible = not IsUIVisible
     end
     
-    -- Aim Lock toggle with configurable key
-    if input.KeyCode.Name == Config.AimLock.Key and Config.AimLock.Enabled then
+    -- AimLock toggle with configurable key
+    if input.KeyCode.Name == Config.AimLock.Key and Config.AimLock.Enabled and IsAuthenticated then
         AimActive = not AimActive
         if AimActive then
             CurrentTarget = GetClosestTarget()
@@ -367,14 +787,41 @@ UIS.InputBegan:Connect(function(input)
     end
 end)
 
--- ==================== MAIN LOOP ====================
-RunService.RenderStepped:Connect(function()
+EnterButton.MouseButton1Click:Connect(function()
+    local enteredKey = string.upper(KeyInput.Text)
+    
+    if enteredKey == "WELCOME2024" then
+        KeyStatus.Text = "✓ ACCESS GRANTED"
+        KeyStatus.TextColor3 = Color3.fromRGB(0, 255, 0)
+        
+        task.wait(1.5)
+        KeyFrame.Visible = false
+        
+        IsAuthenticated = true
+        MainFrame.Visible = true
+        MainTabFrame.Visible = true
+        MiscTabFrame.Visible = false
+        MainTabButton.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+        MiscTabButton.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        
+        SetupHitSounds()
+        SetupBackgroundMusic()
+        
+        print("[NeverLose] Pro Edition activated successfully!")
+    else
+        KeyStatus.Text = "✗ INVALID KEY"
+        KeyStatus.TextColor3 = Color3.fromRGB(255, 50, 50)
+        KeyInput.Text = ""
+    end
+end)
+
+-- Main loop
+RunService.RenderStepped:Connect(function(deltaTime)
     UpdateStatsDisplay()
     
-    if Authenticated then
+    if IsAuthenticated then
         UpdateESP()
         
-        -- Aim Lock
         if AimActive and Config.AimLock.Enabled then
             if CurrentTarget and CurrentTarget.Character then
                 AimAtTarget(CurrentTarget)
@@ -383,31 +830,67 @@ RunService.RenderStepped:Connect(function()
             end
         end
         
-        -- SpinBot
         if Config.SpinBot.Enabled and LocalPlayer.Character then
             local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
             if root then
-                SpinBotAngle = (SpinBotAngle + Config.SpinBot.Speed) % 360
-                root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(SpinBotAngle), 0)
+                SpinAngle = (SpinAngle + Config.SpinBot.Speed * deltaTime * 60) % 360
+                if Config.SpinBot.Mode == "Yaw" then
+                    root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(SpinAngle), 0)
+                else
+                    root.CFrame = root.CFrame * CFrame.Angles(0, 0, math.rad(SpinAngle))
+                end
             end
         end
     end
 end)
 
--- Cleanup
+-- Player cleanup
 Players.PlayerRemoving:Connect(function(player)
     if ESPDrawings[player] then
-        ESPDrawings[player].Box:Remove()
-        ESPDrawings[player].HealthBar:Remove()
-        ESPDrawings[player].Name:Remove()
+        if ESPDrawings[player].Box then ESPDrawings[player].Box:Remove() end
+        if ESPDrawings[player].HealthBar then ESPDrawings[player].HealthBar:Remove() end
+        if ESPDrawings[player].Name then ESPDrawings[player].Name:Remove() end
         ESPDrawings[player] = nil
     end
-    VelocityCache[player] = nil
+    PlayerVelocities[player] = nil
+    LastPlayerHealth[player] = nil
 end)
 
--- Initialize
-SetupHitSounds()
-print("NeverLose Pro Edition loaded for Criminality")
+-- Start loading sequence
+spawn(function()
+    -- Fade in NL letters
+    task.wait(0.5)
+    
+    local nTween = TweenService:Create(NLabel, TweenInfo.new(0.8, Enum.EasingStyle.Back), {
+        TextTransparency = 0
+    })
+    nTween:Play()
+    
+    task.wait(0.2)
+    
+    local lTween = TweenService:Create(LLabel, TweenInfo.new(0.8, Enum.EasingStyle.Back), {
+        TextTransparency = 0
+    })
+    lTween:Play()
+    
+    -- Loading progress
+    task.wait(0.5)
+    
+    for i = 1, 100 do
+        LoadBar.Size = UDim2.new(0, (i / 100) * 400, 1, 0)
+        LoadText.Text = "Loading... " .. i .. "%"
+        task.wait(0.02)
+    end
+    
+    LoadText.Text = "Loaded!"
+    task.wait(1)
+    
+    -- Transition to key screen
+    LoaderFrame.Visible = false
+    KeyFrame.Visible = true
+    KeyFrame.BackgroundTransparency = 0
+end)
 
--- Note: Здесь должна быть твоя система загрузки и аутентификации
--- После успешного ввода ключа установи Authenticated = true
+print("[NeverLose] Pro Edition loader initialized")
+print("[NeverLose] Game: Criminality")
+print("[NeverLose] Key: WELCOME2024")
